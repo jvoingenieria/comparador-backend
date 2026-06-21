@@ -13,18 +13,13 @@ HEADERS = {
 async def fetch_price(client, url, supermarket_name, headers=None):
     try:
         resp = await client.get(url, headers=headers or HEADERS, timeout=10.0)
-        print(f"[{supermarket_name}] Status: {resp.status_code}") # Log para Render
         if resp.status_code == 200:
             return resp.json()
-        else:
-            print(f"[{supermarket_name}] Error Body: {resp.text[:100]}") # Ver si hay mensaje de bloqueo
-            return None
+        print(f"[{supermarket_name}] Status: {resp.status_code}")
     except Exception as e:
-        print(f"[{supermarket_name}] Excepción: {e}")
-        return None
+        print(f"[{supermarket_name}] Error: {e}")
+    return None
 
-# --- Los scrapers se mantienen igual, pero pasando el nombre al fetch_price ---
-# Ejemplo de cómo actualizar uno:
 async def get_mercadona(ean: str, client: httpx.AsyncClient):
     url = f"https://tienda.mercadona.es/api/search/?query={ean}"
     data = await fetch_price(client, url, "Mercadona")
@@ -35,4 +30,46 @@ async def get_mercadona(ean: str, client: httpx.AsyncClient):
             return {"supermarket": "Mercadona", "price": float(price), "name": prod.get("display_name")}
     return None
 
-# ... (Repite la estructura de pasar el nombre del súper a fetch_price para los demás) ...
+async def get_dia(ean: str, client: httpx.AsyncClient):
+    url = f"https://www.dia.es/api/v1/search-back/search/products?q={ean}"
+    data = await fetch_price(client, url, "DIA")
+    if data and data.get("search_items"):
+        prod = data["search_items"][0].get("product", {})
+        price = prod.get("price_per_unit", {}).get("amount")
+        if price:
+            return {"supermarket": "DIA", "price": float(price), "name": prod.get("name")}
+    return None
+
+async def get_carrefour(ean: str, client: httpx.AsyncClient):
+    url = f"https://www.carrefour.es/cloud-api/proxy/v1/search/search?query={ean}"
+    data = await fetch_price(client, url, "Carrefour")
+    if data and data.get("content") and data["content"].get("docs"):
+        prod = data["content"]["docs"][0]
+        price = prod.get("active_price")
+        if price:
+            return {"supermarket": "Carrefour", "price": float(price), "name": prod.get("display_name")}
+    return None
+
+@app.get("/")
+def home():
+    return {"status": "online", "message": "API de Comparación Arsys activa"}
+
+@app.get("/search/{ean}")
+async def search_product(ean: str):
+    async with httpx.AsyncClient() as client:
+        # Buscamos en los 3 principales para probar
+        tasks = [
+            get_mercadona(ean, client),
+            get_dia(ean, client),
+            get_carrefour(ean, client)
+        ]
+        
+        responses = await asyncio.gather(*tasks)
+        
+        # Filtramos los que no han devuelto nada
+        final_results = [r for r in responses if r is not None]
+        
+        return {
+            "ean": ean,
+            "results": final_results
+        }
